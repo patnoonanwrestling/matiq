@@ -50,7 +50,7 @@ const SEED_SESSION_TYPES = [
     id: "st_1on1",
     name: "Private 1-on-1",
     duration: 60,
-    price: 75,
+    price: 60,
     capacity: 1,
     blurb:
       "Fully individualized. Technique, scrambles, and match strategy tailored to one wrestler. Where the fastest gains happen.",
@@ -61,7 +61,7 @@ const SEED_SESSION_TYPES = [
     id: "st_pair",
     name: "Partner Session (2)",
     duration: 60,
-    price: 50,
+    price: 35,
     blurbPerPerson: true,
     capacity: 2,
     blurb:
@@ -73,23 +73,12 @@ const SEED_SESSION_TYPES = [
     id: "st_group",
     name: "Small Group (up to 10)",
     duration: 90,
-    price: 35,
+    price: 25,
     blurbPerPerson: true,
     capacity: 10,
     blurb:
       "High-energy group work. Position-specific drilling, situational wrestling, and conditioning. Per wrestler.",
     color: "#2f7dd4",
-    isPartner: false,
-  },
-  {
-    id: "st_lift_wrestle",
-    name: "Lift + Wrestle (2 hr)",
-    duration: 120,
-    price: 110,
-    capacity: 1,
-    blurb:
-      "One hour of strength and explosive lifting, one hour live on the mat. The complete athlete package.",
-    color: "#1e9e6a",
     isPartner: false,
   },
 ];
@@ -430,10 +419,65 @@ export default function App() {
     .note b { color:var(--paper); }
 
     @media (max-width:760px){
-      .about { grid-template-columns:1fr; } .about-photo { max-width:340px; }
+      .wrap { padding:0 18px; }
+      .nav { padding:14px 0; }
+      .brand-name { font-size:21px; }
+      .brand-tag { font-size:9px; letter-spacing:1.5px; }
+      .nav-cta { padding:10px 16px; font-size:12px; }
+      .hero { padding:40px 0 32px; }
+      .hero-tag { font-size:11px; margin-bottom:18px; letter-spacing:1px; }
+      .hero-tag:before { width:20px; }
+      .hero-mark .wordmark { font-size:64px; letter-spacing:-1.5px; }
+      .hero-slogan { font-size:14px; letter-spacing:4px; margin-top:6px; }
+      .hero-slogan:before { width:24px; margin-right:10px; }
+      .hero p { font-size:16px; margin-top:20px; }
+      .hero-actions { margin-top:26px; gap:10px; }
+      .btn-primary, .btn-ghost { padding:14px 22px; font-size:13px; width:100%; }
+      .pedigree { margin-top:36px; padding:18px 20px; gap:14px; flex-direction:column; align-items:flex-start; }
+      .pedigree-badge { font-size:15px; }
+      .pedigree-text { font-size:13px; }
+      .sec { padding:44px 0; }
+      .sec-head { margin-bottom:28px; }
+      .sec-head h2 { font-size:32px; }
+      .card { padding:22px; border-radius:14px; }
+      .card h3 { font-size:22px; }
+      .price { font-size:30px; }
+      .about { grid-template-columns:1fr; gap:32px; }
+      .about-photo { max-width:280px; margin:0 auto; }
+      .about-photo .mono { font-size:160px; }
+      .about-photo .tagm .display { font-size:26px; }
+      .accolades { grid-template-columns:1fr; gap:10px; }
+      .accolades li { font-size:13.5px; }
+      .coached-under { padding:16px 18px; }
+      .coached-under .names { font-size:13.5px; }
+      .footer { padding:28px 0; margin-top:24px; }
+      .footer-inner { gap:14px; }
+
+      .modal { border-radius:14px; max-height:94vh; }
+      .modal-head { padding:18px 20px; }
+      .modal-head h3 { font-size:20px; }
+      .modal-body { padding:20px; }
       .field-row { grid-template-columns:1fr; }
-      .accolades { grid-template-columns:1fr; }
       .pchoice { grid-template-columns:1fr; }
+      .slot-grid { grid-template-columns:repeat(auto-fill,minmax(80px,1fr)); gap:8px; }
+      .slot { padding:10px 4px; }
+      .slot .st { font-size:13px; }
+      .pay-opt { padding:14px; }
+      .pay-opt .pt { font-size:14px; }
+      .pay-opt .ps { font-size:12px; }
+      .pay-icon { width:24px; height:24px; font-size:11px; }
+      .pay-action { padding:16px; }
+      .summary-row { font-size:13px; }
+      .summary-row.total { font-size:16px; }
+
+      .admin-tabs { gap:4px; overflow-x:auto; flex-wrap:nowrap; padding-bottom:2px; }
+      .admin-tab { padding:10px 14px; font-size:13px; white-space:nowrap; }
+      .row-item { padding:14px; gap:12px; }
+      .ri-name { font-size:14.5px; }
+      .ri-sub { font-size:12.5px; }
+      .ri-actions { flex-direction:column; gap:6px; }
+      .mini { padding:7px 12px; font-size:11px; }
+      .admin-avail-day { padding:14px; }
     }
   `;
 
