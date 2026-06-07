@@ -259,10 +259,11 @@ export default function App() {
     /* ABOUT */
     .about { display:grid; grid-template-columns:1fr 1fr; gap:48px; align-items:center; }
     .about-photo { aspect-ratio:4/5; border-radius:18px; border:1px solid var(--line); position:relative; overflow:hidden;
-      background:linear-gradient(135deg,#1b1e25,#0c0d10); display:grid; place-items:center; }
-    .about-photo .mono { font-family:'Anton',sans-serif; font-size:200px; color:rgba(245,243,238,.05); line-height:1; }
-    .about-photo .tagm { position:absolute; bottom:20px; left:20px; right:20px; }
-    .about-photo .tagm .display { font-size:30px; color:var(--red); }
+      background:linear-gradient(135deg,#1b1e25,#0c0d10); }
+    .about-photo img { width:100%; height:100%; object-fit:cover; object-position:center 25%; display:block; }
+    .about-photo .tagm { position:absolute; bottom:0; left:0; right:0; padding:60px 20px 20px;
+      background:linear-gradient(180deg,transparent,rgba(12,13,16,.92)); }
+    .about-photo .tagm .display { font-size:30px; color:#fff; text-shadow:0 2px 12px rgba(0,0,0,.5); }
     .accolades { list-style:none; margin-top:22px; display:grid; grid-template-columns:1fr 1fr; gap:12px; }
     .accolades li { display:flex; align-items:center; gap:12px; color:var(--paper); font-weight:600; font-size:14px; }
     .accolades li:before { content:""; width:8px; height:8px; background:var(--red); transform:rotate(45deg); flex:none; }
@@ -444,7 +445,7 @@ export default function App() {
       .price { font-size:30px; }
       .about { grid-template-columns:1fr; gap:32px; }
       .about-photo { max-width:280px; margin:0 auto; }
-      .about-photo .mono { font-size:160px; }
+      .about-photo .tagm { padding:50px 18px 18px; }
       .about-photo .tagm .display { font-size:26px; }
       .accolades { grid-template-columns:1fr; gap:10px; }
       .accolades li { font-size:13.5px; }
@@ -625,7 +626,7 @@ function Home({ sessionTypes, onBook }) {
         <div className="wrap">
           <div className="about">
             <div className="about-photo">
-              <div className="mono">N</div>
+              <img src="/coach-noonan.jpg" alt="Coach Patrick Noonan receiving the 2020 PIAA Legacy Award" />
               <div className="tagm">
                 <div className="display">Coach<br />Noonan</div>
               </div>
