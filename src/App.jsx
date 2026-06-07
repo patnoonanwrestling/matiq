@@ -506,6 +506,7 @@ export default function App() {
           availability={availability}
           setAvailability={setAvailability}
           bookings={bookings}
+          setBookings={setBookings}
         />
       ) : (
         <Home
@@ -1078,7 +1079,7 @@ function LoginModal({ onClose, onSuccess }) {
               onKeyDown={(e) => e.key === "Enter" && submit()}
               placeholder="••••••••" />
           </div>
-          {err && <p style={{ color: "var(--red)", fontSize: 13, marginBottom: 14 }}>Incorrect passcode. (Demo code: matiq2026)</p>}
+          {err && <p style={{ color: "var(--red)", fontSize: 13, marginBottom: 14 }}>Incorrect passcode.</p>}
           <button className="btn-primary" style={{ width: "100%" }} onClick={submit}>Unlock Coach Mode</button>
         </div>
       </div>
@@ -1089,8 +1090,24 @@ function LoginModal({ onClose, onSuccess }) {
 // ============================================================================
 // ADMIN PANEL
 // ============================================================================
-function AdminPanel({ sessionTypes, setSessionTypes, availability, setAvailability, bookings }) {
+function AdminPanel({ sessionTypes, setSessionTypes, availability, setAvailability, bookings, setBookings }) {
   const [tab, setTab] = useState("sessions");
+
+  // Delete a booking AND reopen its time slot.
+  // The booking's typeId+dateISO+time uniquely identifies its slot.
+  function deleteBooking(bookingId) {
+    const booking = bookings.find((b) => b.id === bookingId);
+    if (!booking) return;
+    setBookings((bs) => bs.filter((b) => b.id !== bookingId));
+    setAvailability((av) =>
+      av.map((s) =>
+        s.dateISO === booking.dateISO && s.time === booking.time
+          ? { ...s, booked: false }
+          : s
+      )
+    );
+  }
+
   return (
     <section className="sec" style={{ paddingTop: 40 }}>
       <div className="wrap">
@@ -1110,7 +1127,7 @@ function AdminPanel({ sessionTypes, setSessionTypes, availability, setAvailabili
 
         {tab === "sessions" && <SessionTypesAdmin sessionTypes={sessionTypes} setSessionTypes={setSessionTypes} />}
         {tab === "avail" && <AvailabilityAdmin availability={availability} setAvailability={setAvailability} />}
-        {tab === "bookings" && <BookingsAdmin bookings={bookings} />}
+        {tab === "bookings" && <BookingsAdmin bookings={bookings} onDelete={deleteBooking} />}
       </div>
     </section>
   );
@@ -1278,19 +1295,30 @@ function AddSlotModal({ onAdd, onClose }) {
   );
 }
 
-function BookingsAdmin({ bookings }) {
+function BookingsAdmin({ bookings, onDelete }) {
   if (bookings.length === 0) {
     return <div className="empty">No bookings yet. When wrestlers book, they'll show up here with their contact info and payment status.</div>;
   }
   const payLabel = (p) => p === "venmo" ? "Venmo" : p === "cashapp" ? "Cash App" : p === "cash" ? "Cash at session" : p === "card" ? "Card" : p === "paypal" ? "PayPal" : p;
   const payClass = (p) => p === "venmo" ? "venmo" : p === "cashapp" ? "cashapp" : p === "cash" ? "cash" : "paid";
+
+  function handleDelete(b) {
+    const confirmed = window.confirm(
+      `Delete this booking?\n\n${b.wrestler} — ${b.type}\n${fmtDate(b.dateISO)} at ${b.time}\n\nThe time slot will reopen for new bookings.`
+    );
+    if (confirmed) onDelete(b.id);
+  }
+
   return (
     <div className="admin-section">
       {bookings.map((b) => (
         <div className="bk-card" key={b.id}>
           <div className="bk-top">
             <span className="bk-name">{b.wrestler}{b.isPartner && <span className="pill partner">Partner Session</span>}</span>
-            <span className={`pill ${payClass(b.payment)}`}>{payLabel(b.payment)}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span className={`pill ${payClass(b.payment)}`}>{payLabel(b.payment)}</span>
+              <button className="mini danger" onClick={() => handleDelete(b)} title="Delete booking and reopen slot">Delete</button>
+            </div>
           </div>
           <div style={{ color: "var(--fog)", fontSize: 14 }}>
             {b.type} · {fmtDate(b.dateISO)} · {b.time} · ${b.price}
