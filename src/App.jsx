@@ -94,6 +94,19 @@ const fmtDuration = (min) =>
     ? `${Math.floor(min / 60)}h${min % 60 ? ` ${min % 60}m` : ""}`
     : `${min}m`;
 
+// Convert "7:00 AM" / "3:30 PM" to minutes-since-midnight for proper
+// chronological sorting (the DB stores times as text, which sorts
+// alphabetically — "10:00 AM" before "3:00 PM" before "7:00 AM").
+const timeToMinutes = (t) => {
+  const m = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(t.trim());
+  if (!m) return 0;
+  let h = parseInt(m[1], 10) % 12;
+  if (m[3].toUpperCase() === "PM") h += 12;
+  return h * 60 + parseInt(m[2], 10);
+};
+const sortSlotsByTime = (slots) =>
+  [...slots].sort((a, b) => timeToMinutes(a.time) - timeToMinutes(b.time));
+
 // ============================================================================
 // LOGO — MatIQ
 // ============================================================================
@@ -696,6 +709,8 @@ function BookingFlow({ sessionTypes, availability, preselected, onClose, onCompl
     (acc[s.dateISO] = acc[s.dateISO] || []).push(s);
     return acc;
   }, {});
+  // Sort each day's slots chronologically (DB text-sorts times incorrectly)
+  Object.keys(byDate).forEach((d) => { byDate[d] = sortSlotsByTime(byDate[d]); });
 
   // Step validation
   let canContinue = false;
@@ -1342,6 +1357,8 @@ function AvailabilityAdmin({ availability, setAvailability }) {
     (acc[s.dateISO] = acc[s.dateISO] || []).push(s);
     return acc;
   }, {});
+  // Sort each day's slots chronologically (DB text-sorts times incorrectly)
+  Object.keys(byDate).forEach((d) => { byDate[d] = sortSlotsByTime(byDate[d]); });
   const dates = Object.keys(byDate).sort();
 
   async function removeSlot(id) {
