@@ -23,6 +23,14 @@ const ADMIN_PASSCODE = "matiq2026"; // DEMO ONLY — replace with real auth
 // Formspree endpoint — every booking posts here to email Coach Noonan.
 const FORMSPREE_URL = "https://formspree.io/f/mdaveqwb";
 
+// EmailJS — sends the booking confirmation to the wrestler/parent from
+// Coach Noonan's Gmail. Configured at emailjs.com.
+const EMAILJS = {
+  serviceId: "service_bm3es1r",
+  templateId: "template_9pkfsxh",
+  publicKey: "f22Af5-9kp_HMs6Fb",
+};
+
 const PAYMENT_INFO = {
   venmo: "patrick-noonan-49",
   cashapp: "patnoonan1",
@@ -858,6 +866,42 @@ See you on the mat.
       notifyError = "Booking saved, but we couldn't reach our server to notify Coach. Please also text Coach Noonan directly to confirm.";
     }
 
+    // WRESTLER CONFIRMATION EMAIL (via EmailJS) ---------------------------------
+    // Sends a confirmation from Coach Noonan's Gmail to the email the parent
+    // entered. Skipped if they left the email field blank. A failure here
+    // never blocks the booking — they already have the on-screen confirmation.
+    // ----------------------------------------------------------------------------
+    if (info.email && info.email.trim()) {
+      const paymentNote =
+        pay === "venmo" ? `Please complete payment of $${type.price} via Venmo to @${PAYMENT_INFO.venmo}.`
+        : pay === "cashapp" ? `Please complete payment of $${type.price} via Cash App to $${PAYMENT_INFO.cashapp}.`
+        : `Please bring $${type.price} cash to your session.`;
+      try {
+        const ejRes = await fetch("https://api.emailjs.com/api/v1.0/email/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            service_id: EMAILJS.serviceId,
+            template_id: EMAILJS.templateId,
+            user_id: EMAILJS.publicKey,
+            template_params: {
+              to_email: info.email.trim(),
+              wrestler_name: info.wrestler,
+              session_name: type.name,
+              session_when: `${fmtDate(slot.dateISO)} at ${slot.time}`,
+              session_price: `$${type.price}${type.blurbPerPerson ? " per wrestler" : ""}`,
+              payment_method: pay === "venmo" ? "Venmo" : pay === "cashapp" ? "Cash App" : "Cash at session",
+              payment_note: paymentNote,
+            },
+          }),
+        });
+        if (!ejRes.ok) throw new Error(`EmailJS returned ${ejRes.status}`);
+      } catch (err) {
+        console.error("Wrestler confirmation email failed:", err);
+        // Non-blocking — the on-screen confirmation still covers them.
+      }
+    }
+
     // Done — update UI state and show success screen
     setBooking(savedBooking);
     if (notifyError) setSubmitError(notifyError);
@@ -1107,8 +1151,8 @@ function Success({ booking, type, slot, info, pay, partnerNotified, submitError,
         <p style={{ marginTop: 14 }}>Spot reserved. Bring <b style={{ color: "var(--paper)" }}>${type.price}</b> cash to your session.</p>
       )}
 
-      {info.email && pay === "cash" && (
-        <p style={{ fontSize: 13, color: "var(--fog2)" }}>A confirmation is on its way to {info.email}.</p>
+      {info.email && (
+        <p style={{ fontSize: 13, color: "var(--fog2)", marginTop: 10 }}>A confirmation email is on its way to {info.email}.</p>
       )}
 
       {partnerNotified && (
