@@ -22,6 +22,11 @@ import React, { useState, useEffect, useRef } from "react";
 
 const ADMIN_PASSCODE = "matiq2026"; // DEMO ONLY — replace with real auth
 
+// Formspree endpoint — every booking posts here to email Coach Noonan.
+// To change the destination, log into formspree.io and update the form,
+// or swap this URL for a new form's URL.
+const FORMSPREE_URL = "https://formspree.io/f/mdaveqwb";
+
 const PAYMENT_INFO = {
   venmo: "patrick-noonan-49",
   cashapp: "patnoonan1",
@@ -664,6 +669,8 @@ function BookingFlow({ sessionTypes, availability, preselected, onClose, onCompl
   const [pay, setPay] = useState(null);
   const [done, setDone] = useState(false);
   const [booking, setBooking] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState(null);
 
   const isPartnerSession = type?.isPartner;
   const totalSteps = isPartnerSession ? 5 : 4;
@@ -689,7 +696,7 @@ function BookingFlow({ sessionTypes, availability, preselected, onClose, onCompl
     canContinue = !!pay;
   }
 
-  function handleConfirm() {
+  async function handleConfirm() {
     // STRIPE INTEGRATION POINT --------------------------------------------------
     // If pay === "card" (currently disabled), call your backend to create a
     // Stripe Checkout Session and redirect. Same for PayPal.
@@ -737,9 +744,57 @@ See you on the mat.
       window.open(`mailto:${partnerInfo.email}?subject=${subject}&body=${body}`, "_blank");
     }
 
-    setBooking(newBooking);
-    onComplete(newBooking, slot.id);
-    setDone(true);
+    // COACH EMAIL NOTIFICATION (via Formspree) ---------------------------------
+    // Posts a clean, readable booking summary to Coach Noonan's inbox.
+    // The "_subject" field controls the email subject line in Formspree.
+    // --------------------------------------------------------------------------
+    setSubmitting(true);
+    setSubmitError(null);
+
+    const partnerLine = isPartnerSession
+      ? (partnerChoice === "own"
+          ? `${partnerInfo.name || "TBD"}${partnerInfo.email ? ` (${partnerInfo.email})` : ""}`
+          : "Coach to pair")
+      : null;
+
+    const emailPayload = {
+      _subject: `🤼 New MatIQ booking — ${info.wrestler} · ${fmtDate(slot.dateISO)} ${slot.time}`,
+      "Wrestler": info.wrestler,
+      "Session": `${type.name} — $${type.price}${type.blurbPerPerson ? "/wrestler" : ""}`,
+      "When": `${fmtDate(slot.dateISO)} at ${slot.time}`,
+      "Duration": fmtDuration(type.duration),
+      "Contact Phone": info.contact,
+      "Contact Email": info.email || "(not provided)",
+      "Payment Method": pay === "venmo" ? `Venmo (@${PAYMENT_INFO.venmo})`
+        : pay === "cashapp" ? `Cash App ($${PAYMENT_INFO.cashapp})`
+        : pay === "cash" ? "Cash at session"
+        : pay,
+      ...(partnerLine && { "Partner": partnerLine }),
+      ...(info.notes && { "Notes from wrestler": info.notes }),
+      "Booked at": new Date().toLocaleString("en-US", { timeZone: "America/New_York" }) + " ET",
+    };
+
+    try {
+      const res = await fetch(FORMSPREE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify(emailPayload),
+      });
+      if (!res.ok) throw new Error(`Formspree returned ${res.status}`);
+      // Success — show the confirmation screen
+      setBooking(newBooking);
+      onComplete(newBooking, slot.id);
+      setDone(true);
+    } catch (err) {
+      // The booking still completes locally, but warn the user
+      console.error("Booking notification failed:", err);
+      setSubmitError("We couldn't reach our server to notify Coach. Your booking details are saved on this screen — please also text Coach Noonan directly to confirm.");
+      setBooking(newBooking);
+      onComplete(newBooking, slot.id);
+      setDone(true);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   const minStepForBack = preselected ? 1 : 0;
@@ -753,7 +808,7 @@ See you on the mat.
         </div>
         <div className="modal-body">
           {done ? (
-            <Success booking={booking} type={type} slot={slot} info={info} pay={pay} partnerNotified={isPartnerSession && partnerChoice === "own" && partnerInfo.notify} onClose={onClose} />
+            <Success booking={booking} type={type} slot={slot} info={info} pay={pay} partnerNotified={isPartnerSession && partnerChoice === "own" && partnerInfo.notify} submitError={submitError} onClose={onClose} />
           ) : (
             <>
               <div className="stepper">
@@ -916,13 +971,15 @@ See you on the mat.
               )}
 
               <div style={{ display: "flex", gap: 12, marginTop: 28 }}>
-                {step > minStepForBack && (
+                {step > minStepForBack && !submitting && (
                   <button className="btn-ghost" style={{ flex: "none", padding: "14px 22px" }} onClick={() => setStep(step - 1)}>Back</button>
                 )}
                 {step < totalSteps - 1 ? (
                   <button className="btn-primary" style={{ flex: 1 }} disabled={!canContinue} onClick={() => canContinue && setStep(step + 1)}>Continue →</button>
                 ) : (
-                  <button className="btn-primary" style={{ flex: 1 }} disabled={!canContinue} onClick={handleConfirm}>Confirm Booking</button>
+                  <button className="btn-primary" style={{ flex: 1 }} disabled={!canContinue || submitting} onClick={handleConfirm}>
+                    {submitting ? "Submitting…" : "Confirm Booking"}
+                  </button>
                 )}
               </div>
             </>
@@ -933,7 +990,7 @@ See you on the mat.
   );
 }
 
-function Success({ booking, type, slot, info, pay, partnerNotified, onClose }) {
+function Success({ booking, type, slot, info, pay, partnerNotified, submitError, onClose }) {
   const venmoNote = encodeURIComponent(`MatIQ ${type.name} - ${info.wrestler} - ${fmtDate(slot.dateISO)} ${slot.time}`);
   const venmoLink = `https://venmo.com/${PAYMENT_INFO.venmo}?txn=pay&amount=${type.price}&note=${venmoNote}`;
   const cashappLink = `https://cash.app/$${PAYMENT_INFO.cashapp}/${type.price}`;
@@ -946,6 +1003,12 @@ function Success({ booking, type, slot, info, pay, partnerNotified, onClose }) {
       <h3>See You On The Mat</h3>
       <p><b style={{ color: "var(--paper)" }}>{type.name}</b></p>
       <p>{fmtDate(slot.dateISO)} · {slot.time}</p>
+
+      {submitError && (
+        <div style={{ background: "rgba(224,169,46,.08)", border: "1px solid rgba(224,169,46,.4)", borderRadius: 10, padding: "12px 14px", margin: "16px 0", fontSize: 13, color: "var(--fog)", lineHeight: 1.5, textAlign: "left" }}>
+          <b style={{ color: "var(--gold)" }}>⚠ Notification delayed.</b> {submitError}
+        </div>
+      )}
 
       {pay === "venmo" && (
         <div className="pay-action">
