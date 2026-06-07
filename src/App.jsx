@@ -1,21 +1,19 @@
 import React, { useState, useEffect, useRef } from "react";
+import { supabase } from "./supabase.js";
 
 // ============================================================================
 // MatIQ — Win the scrambles
 // Coach Noonan's private & small-group wrestling coaching platform
 // ----------------------------------------------------------------------------
-// NOTE ON DATA: In-memory React state. Data resets on reload — expected for
-// a prototype. A developer wires this to a real backend for production.
+// DATA: Backed by Supabase (tables: session_types, availability, bookings).
 //
-// NOTE ON PAYMENTS:
-//   - Venmo & Cash App: mobile deep links (work great on phones, show
-//     username on desktop). Fully functional today.
-//   - Card (Stripe) & PayPal: "Coming soon" — visible in UI, ready to flip on.
-//     Search "STRIPE INTEGRATION POINT" for the wiring spot.
+// PAYMENTS:
+//   - Venmo & Cash App: mobile deep links (work today).
+//   - Card (Stripe) & PayPal: "Coming soon" — UI present, ready to wire up.
 //
-// NOTE ON PARTNER EMAIL: Uses mailto: to pre-fill the user's email client.
-// For automatic server-sent emails, swap in Resend/SendGrid.
-// Search "PARTNER EMAIL".
+// PARTNER EMAIL: Uses mailto: to pre-fill user's email client.
+//
+// COACH NOTIFICATIONS: Sent via Formspree on every booking.
 //
 // ADMIN ACCESS: Footer → "Coach Login". Demo passcode: matiq2026
 // ============================================================================
@@ -23,8 +21,6 @@ import React, { useState, useEffect, useRef } from "react";
 const ADMIN_PASSCODE = "matiq2026"; // DEMO ONLY — replace with real auth
 
 // Formspree endpoint — every booking posts here to email Coach Noonan.
-// To change the destination, log into formspree.io and update the form,
-// or swap this URL for a new form's URL.
 const FORMSPREE_URL = "https://formspree.io/f/mdaveqwb";
 
 const PAYMENT_INFO = {
@@ -50,68 +46,38 @@ const COACH = {
   },
 };
 
-const SEED_SESSION_TYPES = [
-  {
-    id: "st_1on1",
-    name: "Private 1-on-1",
-    duration: 60,
-    price: 60,
-    capacity: 1,
-    blurb:
-      "Fully individualized. Technique, scrambles, and match strategy tailored to one wrestler. Where the fastest gains happen.",
-    color: "#d4422f",
-    isPartner: false,
-  },
-  {
-    id: "st_pair",
-    name: "Partner Session (2)",
-    duration: 60,
-    price: 35,
-    blurbPerPerson: true,
-    capacity: 2,
-    blurb:
-      "Bring a partner or train with one of Coach's. Live drilling with real resistance, coached rep by rep. Per wrestler.",
-    color: "#e08a1e",
-    isPartner: true,
-  },
-  {
-    id: "st_group",
-    name: "Small Group (up to 10)",
-    duration: 90,
-    price: 25,
-    blurbPerPerson: true,
-    capacity: 10,
-    blurb:
-      "High-energy group work. Position-specific drilling, situational wrestling, and conditioning. Per wrestler.",
-    color: "#2f7dd4",
-    isPartner: false,
-  },
-];
-
-// Default schedule: Mon–Sun, 7 AM – 5 PM ET, with 1–3 PM lunch break.
+// Default time slots: 7 AM – 5 PM with 1–3 PM lunch break.
 const DEFAULT_TIMES = [
   "7:00 AM", "8:00 AM", "9:00 AM", "10:00 AM", "11:00 AM", "12:00 PM",
-  // 1:00 – 3:00 PM blocked for lunch
   "3:00 PM", "4:00 PM", "5:00 PM",
 ];
 
-function seedAvailability() {
-  const slots = [];
-  const now = new Date();
-  for (let d = 1; d <= 14; d++) {
-    const date = new Date(now);
-    date.setDate(now.getDate() + d);
-    DEFAULT_TIMES.forEach((t, i) => {
-      slots.push({
-        id: `slot_${d}_${i}`,
-        dateISO: date.toISOString().slice(0, 10),
-        time: t,
-        booked: false,
-      });
-    });
-  }
-  return slots;
-}
+// ============================================================================
+// SCHEMA MAPPING — convert between camelCase (UI) and snake_case (Supabase)
+// ============================================================================
+const fromDbSession = (r) => ({
+  id: r.id, name: r.name, duration: r.duration, price: r.price,
+  capacity: r.capacity, blurb: r.blurb, blurbPerPerson: r.blurb_per_person,
+  color: r.color, isPartner: r.is_partner, sortOrder: r.sort_order,
+});
+const toDbSession = (s) => ({
+  id: s.id, name: s.name, duration: s.duration, price: s.price,
+  capacity: s.capacity, blurb: s.blurb, blurb_per_person: s.blurbPerPerson || false,
+  color: s.color, is_partner: s.isPartner || false,
+});
+
+const fromDbSlot = (r) => ({
+  id: r.id, dateISO: r.date_iso, time: r.time, booked: r.booked,
+});
+
+const fromDbBooking = (r) => ({
+  id: r.id, typeId: r.type_id, type: r.type_name, price: r.price,
+  dateISO: r.date_iso, time: r.time, wrestler: r.wrestler,
+  contact: r.contact, email: r.email, notes: r.notes, payment: r.payment,
+  isPartner: r.is_partner, partnerChoice: r.partner_choice,
+  partnerName: r.partner_name, partnerEmail: r.partner_email,
+  slotId: r.slot_id, createdAt: r.created_at,
+});
 
 const fmtDate = (iso) => {
   const [y, m, d] = iso.split("-").map(Number);
@@ -158,12 +124,49 @@ function Logo({ size = 42 }) {
 // ROOT
 // ============================================================================
 export default function App() {
-  const [sessionTypes, setSessionTypes] = useState(SEED_SESSION_TYPES);
-  const [availability, setAvailability] = useState(seedAvailability);
+  const [sessionTypes, setSessionTypes] = useState([]);
+  const [availability, setAvailability] = useState([]);
   const [bookings, setBookings] = useState([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const [view, setView] = useState("home");
   const [selectedType, setSelectedType] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+
+  // Load all data from Supabase on first render
+  useEffect(() => {
+    loadAllData();
+  }, []);
+
+  async function loadAllData() {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [stRes, avRes, bkRes] = await Promise.all([
+        supabase.from("session_types").select("*").order("sort_order"),
+        supabase.from("availability").select("*").order("date_iso").order("time"),
+        supabase.from("bookings").select("*").order("created_at", { ascending: false }),
+      ]);
+      if (stRes.error) throw stRes.error;
+      if (avRes.error) throw avRes.error;
+      if (bkRes.error) throw bkRes.error;
+      setSessionTypes((stRes.data || []).map(fromDbSession));
+      setAvailability((avRes.data || []).map(fromDbSlot));
+      setBookings((bkRes.data || []).map(fromDbBooking));
+    } catch (err) {
+      console.error("Failed to load from Supabase:", err);
+      setLoadError("Couldn't load data. Please refresh.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Refresh data when entering Coach Mode (so Patrick sees the latest bookings)
+  useEffect(() => {
+    if (isAdmin && view === "admin") {
+      loadAllData();
+    }
+  }, [isAdmin, view]);
 
   const styles = `
     @import url('https://fonts.googleapis.com/css2?family=Anton&family=Archivo:wght@400;500;600;700;800;900&family=Archivo+Narrow:wght@500;600;700&display=swap');
@@ -499,7 +502,18 @@ export default function App() {
         adminMode={view === "admin"}
       />
 
-      {view === "admin" && isAdmin ? (
+      {loading ? (
+        <div className="wrap" style={{ padding: "120px 24px", textAlign: "center", color: "var(--fog)" }}>
+          <div style={{ fontFamily: "'Anton',sans-serif", fontSize: 28, textTransform: "uppercase", letterSpacing: 1, color: "var(--paper)", marginBottom: 8 }}>Loading…</div>
+          <div style={{ fontSize: 14 }}>Pulling up the latest schedule.</div>
+        </div>
+      ) : loadError ? (
+        <div className="wrap" style={{ padding: "120px 24px", textAlign: "center" }}>
+          <div style={{ fontFamily: "'Anton',sans-serif", fontSize: 28, textTransform: "uppercase", letterSpacing: 1, color: "var(--red)", marginBottom: 12 }}>Couldn't Connect</div>
+          <div style={{ fontSize: 15, color: "var(--fog)", marginBottom: 24 }}>{loadError}</div>
+          <button className="btn-primary" onClick={loadAllData}>Try Again</button>
+        </div>
+      ) : view === "admin" && isAdmin ? (
         <AdminPanel
           sessionTypes={sessionTypes}
           setSessionTypes={setSessionTypes}
@@ -698,29 +712,8 @@ function BookingFlow({ sessionTypes, availability, preselected, onClose, onCompl
   }
 
   async function handleConfirm() {
-    // STRIPE INTEGRATION POINT --------------------------------------------------
-    // If pay === "card" (currently disabled), call your backend to create a
-    // Stripe Checkout Session and redirect. Same for PayPal.
-    // Venmo/Cash App handled below via deep links on the success screen.
-    // ---------------------------------------------------------------------------
-    const newBooking = {
-      id: "bk_" + Date.now(),
-      typeId: type.id,
-      type: type.name,
-      price: type.price,
-      dateISO: slot.dateISO,
-      time: slot.time,
-      wrestler: info.wrestler,
-      contact: info.contact,
-      email: info.email,
-      notes: info.notes,
-      payment: pay,
-      isPartner: isPartnerSession,
-      partnerChoice: isPartnerSession ? partnerChoice : null,
-      partnerName: isPartnerSession && partnerChoice === "own" ? partnerInfo.name : null,
-      partnerEmail: isPartnerSession && partnerChoice === "own" ? partnerInfo.email : null,
-      createdAt: new Date().toISOString(),
-    };
+    setSubmitting(true);
+    setSubmitError(null);
 
     // PARTNER EMAIL ------------------------------------------------------------
     // If the user wants to notify their partner, open their email client
@@ -745,13 +738,75 @@ See you on the mat.
       window.open(`mailto:${partnerInfo.email}?subject=${subject}&body=${body}`, "_blank");
     }
 
-    // COACH EMAIL NOTIFICATION (via Formspree) ---------------------------------
-    // Posts a clean, readable booking summary to Coach Noonan's inbox.
-    // The "_subject" field controls the email subject line in Formspree.
+    // SUPABASE — Save booking and mark the slot as booked.
+    // This is the critical step that makes the slot unavailable to others.
+    // We do this in two operations:
+    //   1. Mark availability.booked = true for this slot
+    //   2. Insert the booking row
+    // If either fails, we surface an error and don't show the success screen.
     // --------------------------------------------------------------------------
-    setSubmitting(true);
-    setSubmitError(null);
+    let savedBooking = null;
+    try {
+      // 1. Re-check the slot is still available (in case someone booked it
+      // between when this user loaded the page and now). This protects against
+      // double-booking by two people picking the same slot at the same time.
+      const { data: currentSlot, error: slotCheckErr } = await supabase
+        .from("availability")
+        .select("booked")
+        .eq("id", slot.id)
+        .single();
+      if (slotCheckErr) throw slotCheckErr;
+      if (currentSlot?.booked) {
+        throw new Error("ALREADY_BOOKED");
+      }
 
+      // 2. Mark the slot as booked
+      const { error: slotErr } = await supabase
+        .from("availability")
+        .update({ booked: true })
+        .eq("id", slot.id);
+      if (slotErr) throw slotErr;
+
+      // 3. Insert the booking row
+      const dbBooking = {
+        type_id: type.id,
+        type_name: type.name,
+        price: type.price,
+        date_iso: slot.dateISO,
+        time: slot.time,
+        wrestler: info.wrestler,
+        contact: info.contact,
+        email: info.email || null,
+        notes: info.notes || null,
+        payment: pay,
+        is_partner: isPartnerSession,
+        partner_choice: isPartnerSession ? partnerChoice : null,
+        partner_name: isPartnerSession && partnerChoice === "own" ? partnerInfo.name : null,
+        partner_email: isPartnerSession && partnerChoice === "own" ? partnerInfo.email : null,
+        slot_id: slot.id,
+      };
+      const { data: insertedRows, error: bookErr } = await supabase
+        .from("bookings")
+        .insert(dbBooking)
+        .select()
+        .single();
+      if (bookErr) throw bookErr;
+      savedBooking = fromDbBooking(insertedRows);
+    } catch (err) {
+      console.error("Booking save failed:", err);
+      if (err.message === "ALREADY_BOOKED") {
+        setSubmitError("Sorry — someone else just booked this slot. Please pick a different time.");
+      } else {
+        setSubmitError("Couldn't save your booking. Please try again or text Coach Noonan directly.");
+      }
+      setSubmitting(false);
+      return;
+    }
+
+    // COACH EMAIL NOTIFICATION (via Formspree) ---------------------------------
+    // Now that the booking is saved, send the email notification. If this
+    // fails, the booking still went through — we just warn the user.
+    // --------------------------------------------------------------------------
     const partnerLine = isPartnerSession
       ? (partnerChoice === "own"
           ? `${partnerInfo.name || "TBD"}${partnerInfo.email ? ` (${partnerInfo.email})` : ""}`
@@ -775,6 +830,7 @@ See you on the mat.
       "Booked at": new Date().toLocaleString("en-US", { timeZone: "America/New_York" }) + " ET",
     };
 
+    let notifyError = null;
     try {
       const res = await fetch(FORMSPREE_URL, {
         method: "POST",
@@ -782,20 +838,17 @@ See you on the mat.
         body: JSON.stringify(emailPayload),
       });
       if (!res.ok) throw new Error(`Formspree returned ${res.status}`);
-      // Success — show the confirmation screen
-      setBooking(newBooking);
-      onComplete(newBooking, slot.id);
-      setDone(true);
     } catch (err) {
-      // The booking still completes locally, but warn the user
       console.error("Booking notification failed:", err);
-      setSubmitError("We couldn't reach our server to notify Coach. Your booking details are saved on this screen — please also text Coach Noonan directly to confirm.");
-      setBooking(newBooking);
-      onComplete(newBooking, slot.id);
-      setDone(true);
-    } finally {
-      setSubmitting(false);
+      notifyError = "Booking saved, but we couldn't reach our server to notify Coach. Please also text Coach Noonan directly to confirm.";
     }
+
+    // Done — update UI state and show success screen
+    setBooking(savedBooking);
+    if (notifyError) setSubmitError(notifyError);
+    onComplete(savedBooking, slot.id);
+    setDone(true);
+    setSubmitting(false);
   }
 
   const minStepForBack = preselected ? 1 : 0;
@@ -1093,19 +1146,46 @@ function LoginModal({ onClose, onSuccess }) {
 function AdminPanel({ sessionTypes, setSessionTypes, availability, setAvailability, bookings, setBookings }) {
   const [tab, setTab] = useState("sessions");
 
-  // Delete a booking AND reopen its time slot.
-  // The booking's typeId+dateISO+time uniquely identifies its slot.
-  function deleteBooking(bookingId) {
+  // Delete a booking AND reopen its time slot. Persists to Supabase.
+  async function deleteBooking(bookingId) {
     const booking = bookings.find((b) => b.id === bookingId);
     if (!booking) return;
-    setBookings((bs) => bs.filter((b) => b.id !== bookingId));
-    setAvailability((av) =>
-      av.map((s) =>
-        s.dateISO === booking.dateISO && s.time === booking.time
-          ? { ...s, booked: false }
-          : s
-      )
-    );
+    try {
+      // Reopen the slot (only if we have a slot_id reference)
+      if (booking.slotId) {
+        const { error: slotErr } = await supabase
+          .from("availability")
+          .update({ booked: false })
+          .eq("id", booking.slotId);
+        if (slotErr) throw slotErr;
+      } else {
+        // Older bookings without slot_id — match by date+time as fallback
+        const { error: slotErr } = await supabase
+          .from("availability")
+          .update({ booked: false })
+          .eq("date_iso", booking.dateISO)
+          .eq("time", booking.time);
+        if (slotErr) throw slotErr;
+      }
+      // Delete the booking
+      const { error: bkErr } = await supabase
+        .from("bookings")
+        .delete()
+        .eq("id", bookingId);
+      if (bkErr) throw bkErr;
+      // Update local state
+      setBookings((bs) => bs.filter((b) => b.id !== bookingId));
+      setAvailability((av) =>
+        av.map((s) =>
+          (s.id === booking.slotId || (s.dateISO === booking.dateISO && s.time === booking.time))
+            ? { ...s, booked: false }
+            : s
+        )
+      );
+    } catch (err) {
+      console.error("Delete booking failed:", err);
+      alert("Couldn't delete the booking. Please refresh and try again.");
+    }
   }
 
   return (
@@ -1139,12 +1219,41 @@ function SessionTypesAdmin({ sessionTypes, setSessionTypes }) {
   const [editing, setEditing] = useState(null);
   const blank = { name: "", duration: 60, price: 50, capacity: 1, blurb: "", blurbPerPerson: false, color: PALETTE[0], isPartner: false };
 
-  function save(form) {
-    if (form.id) setSessionTypes((s) => s.map((t) => (t.id === form.id ? form : t)));
-    else setSessionTypes((s) => [...s, { ...form, id: "st_" + Date.now() }]);
-    setEditing(null);
+  async function save(form) {
+    try {
+      if (form.id) {
+        const { error } = await supabase
+          .from("session_types")
+          .update(toDbSession(form))
+          .eq("id", form.id);
+        if (error) throw error;
+        setSessionTypes((s) => s.map((t) => (t.id === form.id ? form : t)));
+      } else {
+        const newId = "st_" + Date.now();
+        const newSession = { ...form, id: newId };
+        const { error } = await supabase
+          .from("session_types")
+          .insert(toDbSession(newSession));
+        if (error) throw error;
+        setSessionTypes((s) => [...s, newSession]);
+      }
+      setEditing(null);
+    } catch (err) {
+      console.error("Save session type failed:", err);
+      alert("Couldn't save the session. Please try again.");
+    }
   }
-  function remove(id) { setSessionTypes((s) => s.filter((t) => t.id !== id)); }
+
+  async function remove(id) {
+    try {
+      const { error } = await supabase.from("session_types").delete().eq("id", id);
+      if (error) throw error;
+      setSessionTypes((s) => s.filter((t) => t.id !== id));
+    } catch (err) {
+      console.error("Delete session type failed:", err);
+      alert("Couldn't delete the session type. It may have bookings linked to it.");
+    }
+  }
 
   return (
     <div className="admin-section">
@@ -1235,10 +1344,34 @@ function AvailabilityAdmin({ availability, setAvailability }) {
   }, {});
   const dates = Object.keys(byDate).sort();
 
-  function removeSlot(id) { setAvailability((a) => a.filter((s) => s.id !== id)); }
-  function addSlot(dateISO, time) {
-    setAvailability((a) => [...a, { id: "slot_" + Date.now(), dateISO, time, booked: false }]);
-    setAdding(false);
+  async function removeSlot(id) {
+    try {
+      const { error } = await supabase.from("availability").delete().eq("id", id);
+      if (error) throw error;
+      setAvailability((a) => a.filter((s) => s.id !== id));
+    } catch (err) {
+      console.error("Remove slot failed:", err);
+      alert("Couldn't remove the slot. Please try again.");
+    }
+  }
+  async function addSlot(dateISO, time) {
+    try {
+      const { data, error } = await supabase
+        .from("availability")
+        .insert({ date_iso: dateISO, time, booked: false })
+        .select()
+        .single();
+      if (error) throw error;
+      setAvailability((a) => [...a, fromDbSlot(data)]);
+      setAdding(false);
+    } catch (err) {
+      console.error("Add slot failed:", err);
+      if (err.code === "23505") {
+        alert("A slot at this date and time already exists.");
+      } else {
+        alert("Couldn't open the slot. Please try again.");
+      }
+    }
   }
 
   return (
