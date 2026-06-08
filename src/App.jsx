@@ -67,11 +67,13 @@ const fromDbSession = (r) => ({
   id: r.id, name: r.name, duration: r.duration, price: r.price,
   capacity: r.capacity, blurb: r.blurb, blurbPerPerson: r.blurb_per_person,
   color: r.color, isPartner: r.is_partner, sortOrder: r.sort_order,
+  sessionsCount: r.sessions_count || 1, weeksHorizon: r.weeks_horizon || 2,
 });
 const toDbSession = (s) => ({
   id: s.id, name: s.name, duration: s.duration, price: s.price,
   capacity: s.capacity, blurb: s.blurb, blurb_per_person: s.blurbPerPerson || false,
   color: s.color, is_partner: s.isPartner || false,
+  sessions_count: s.sessionsCount || 1, weeks_horizon: s.weeksHorizon || 2,
 });
 
 const fromDbSlot = (r) => ({
@@ -85,6 +87,7 @@ const fromDbBooking = (r) => ({
   isPartner: r.is_partner, partnerChoice: r.partner_choice,
   partnerName: r.partner_name, partnerEmail: r.partner_email,
   slotId: r.slot_id, createdAt: r.created_at,
+  packageSessions: r.package_sessions || null,
 });
 
 const fmtDate = (iso) => {
@@ -561,9 +564,10 @@ export default function App() {
           availability={availability}
           preselected={selectedType}
           onClose={() => setView("home")}
-          onComplete={(booking, slotId) => {
+          onComplete={(booking, slotIds) => {
+            const ids = Array.isArray(slotIds) ? slotIds : [slotIds];
             setBookings((b) => [booking, ...b]);
-            setAvailability((a) => a.map((s) => (s.id === slotId ? { ...s, booked: true } : s)));
+            setAvailability((a) => a.map((s) => (ids.includes(s.id) ? { ...s, booked: true } : s)));
           }}
         />
       )}
@@ -643,10 +647,12 @@ function Home({ sessionTypes, onBook }) {
             <p>Every format is coached personally by Coach Noonan. Pick what fits your wrestler's goals and schedule.</p>
           </div>
           <div className="cards">
-            {sessionTypes.map((t) => (
+            {sessionTypes.map((t) => {
+              const isPack = (t.sessionsCount || 1) > 1;
+              return (
               <div className="card" key={t.id}>
                 <div className="card-accent" style={{ background: t.color }} />
-                <div className="card-cap">{t.capacity === 1 ? "Individual" : `Up to ${t.capacity} wrestlers`}</div>
+                <div className="card-cap">{isPack ? `${t.sessionsCount}-session package` : t.capacity === 1 ? "Individual" : `Up to ${t.capacity} wrestlers`}</div>
                 <h3>{t.name}</h3>
                 <div className="card-meta">
                   <span>⏱ {fmtDuration(t.duration)}</span>
@@ -654,11 +660,15 @@ function Home({ sessionTypes, onBook }) {
                 </div>
                 <div className="card-blurb">{t.blurb}</div>
                 <div className="card-foot">
-                  <div className="price">${t.price}<small>{t.blurbPerPerson ? " /wrestler" : ""}</small></div>
+                  <div className="price">
+                    ${t.price}
+                    <small>{t.blurbPerPerson ? " /wrestler" : isPack ? ` ($${Math.round(t.price / t.sessionsCount)}/session)` : ""}</small>
+                  </div>
                   <button className="card-book" onClick={() => onBook(t)}>Book →</button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </section>
@@ -697,7 +707,7 @@ function Home({ sessionTypes, onBook }) {
 function BookingFlow({ sessionTypes, availability, preselected, onClose, onComplete }) {
   const [step, setStep] = useState(preselected ? 1 : 0);
   const [type, setType] = useState(preselected || null);
-  const [slot, setSlot] = useState(null);
+  const [slots, setSlots] = useState([]); // selected slot(s) — array supports packages
   const [info, setInfo] = useState({ wrestler: "", contact: "", email: "", notes: "" });
   // Partner-specific state
   const [partnerChoice, setPartnerChoice] = useState(null); // "own" | "coach"
@@ -709,10 +719,39 @@ function BookingFlow({ sessionTypes, availability, preselected, onClose, onCompl
   const [submitError, setSubmitError] = useState(null);
 
   const isPartnerSession = type?.isPartner;
+  const sessionsNeeded = type?.sessionsCount || 1;
+  const isPackage = sessionsNeeded > 1;
+  const weeksHorizon = type?.weeksHorizon || 2;
+
+  // For non-package flows, the "primary" slot is the first selected one.
+  const slot = slots[0] || null;
+
   const totalSteps = isPartnerSession ? 5 : 4;
   const stepIndices = isPartnerSession ? [0, 1, 2, 3, 4] : [0, 1, 2, 3];
 
-  const openSlots = availability.filter((s) => !s.booked);
+  // Toggle a slot in/out of the selection. Packages cap at sessionsNeeded;
+  // single sessions replace the selection.
+  function toggleSlot(s) {
+    if (isPackage) {
+      setSlots((prev) => {
+        const exists = prev.find((x) => x.id === s.id);
+        if (exists) return prev.filter((x) => x.id !== s.id);
+        if (prev.length >= sessionsNeeded) return prev; // at cap, ignore
+        return [...prev, s];
+      });
+    } else {
+      setSlots([s]);
+    }
+  }
+
+  // Only show slots within this session type's booking horizon (in weeks).
+  const horizonCutoff = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() + weeksHorizon * 7);
+    return d.toISOString().slice(0, 10);
+  })();
+
+  const openSlots = availability.filter((s) => !s.booked && s.dateISO <= horizonCutoff);
   const byDate = openSlots.reduce((acc, s) => {
     (acc[s.dateISO] = acc[s.dateISO] || []).push(s);
     return acc;
@@ -723,7 +762,7 @@ function BookingFlow({ sessionTypes, availability, preselected, onClose, onCompl
   // Step validation
   let canContinue = false;
   if (step === 0) canContinue = !!type;
-  else if (step === 1) canContinue = !!slot;
+  else if (step === 1) canContinue = isPackage ? slots.length === sessionsNeeded : slots.length === 1;
   else if (step === 2 && isPartnerSession) {
     canContinue =
       partnerChoice === "coach" ||
@@ -761,42 +800,49 @@ See you on the mat.
       window.open(`mailto:${partnerInfo.email}?subject=${subject}&body=${body}`, "_blank");
     }
 
-    // SUPABASE — Save booking and mark the slot as booked.
-    // This is the critical step that makes the slot unavailable to others.
-    // We do this in two operations:
-    //   1. Mark availability.booked = true for this slot
-    //   2. Insert the booking row
-    // If either fails, we surface an error and don't show the success screen.
+    // SUPABASE — Save booking and mark the selected slot(s) as booked.
+    // For packages, this reserves all N slots under one booking. We re-check
+    // every slot is still free, mark them all booked, then insert the booking.
+    // If anything fails, we roll back any slots we already flipped.
     // --------------------------------------------------------------------------
     let savedBooking = null;
+    const selectedSlots = sortSlotsByTime([...slots]).sort((a, b) =>
+      a.dateISO < b.dateISO ? -1 : a.dateISO > b.dateISO ? 1 : timeToMinutes(a.time) - timeToMinutes(b.time)
+    );
+    const slotIds = selectedSlots.map((s) => s.id);
+    let flippedIds = [];
     try {
-      // 1. Re-check the slot is still available (in case someone booked it
-      // between when this user loaded the page and now). This protects against
-      // double-booking by two people picking the same slot at the same time.
-      const { data: currentSlot, error: slotCheckErr } = await supabase
+      // 1. Re-check all selected slots are still available (guards against
+      // someone grabbing one of them while this user was filling the form).
+      const { data: currentSlots, error: slotCheckErr } = await supabase
         .from("availability")
-        .select("booked")
-        .eq("id", slot.id)
-        .single();
+        .select("id, booked")
+        .in("id", slotIds);
       if (slotCheckErr) throw slotCheckErr;
-      if (currentSlot?.booked) {
+      const anyTaken = (currentSlots || []).some((s) => s.booked);
+      if (anyTaken || (currentSlots || []).length !== slotIds.length) {
         throw new Error("ALREADY_BOOKED");
       }
 
-      // 2. Mark the slot as booked
+      // 2. Mark all selected slots as booked
       const { error: slotErr } = await supabase
         .from("availability")
         .update({ booked: true })
-        .eq("id", slot.id);
+        .in("id", slotIds);
       if (slotErr) throw slotErr;
+      flippedIds = slotIds;
 
-      // 3. Insert the booking row
+      // 3. Insert the booking row. The primary date/time is the first session;
+      // for packages, all sessions are stored in package_sessions as text.
+      const packageSessionsText = isPackage
+        ? selectedSlots.map((s) => `${fmtDate(s.dateISO)} at ${s.time}`).join("; ")
+        : null;
       const dbBooking = {
         type_id: type.id,
         type_name: type.name,
         price: type.price,
-        date_iso: slot.dateISO,
-        time: slot.time,
+        date_iso: selectedSlots[0].dateISO,
+        time: selectedSlots[0].time,
         wrestler: info.wrestler,
         contact: info.contact,
         email: info.email || null,
@@ -806,7 +852,8 @@ See you on the mat.
         partner_choice: isPartnerSession ? partnerChoice : null,
         partner_name: isPartnerSession && partnerChoice === "own" ? partnerInfo.name : null,
         partner_email: isPartnerSession && partnerChoice === "own" ? partnerInfo.email : null,
-        slot_id: slot.id,
+        slot_id: selectedSlots[0].id,
+        package_sessions: packageSessionsText,
       };
       const { data: insertedRows, error: bookErr } = await supabase
         .from("bookings")
@@ -817,8 +864,14 @@ See you on the mat.
       savedBooking = fromDbBooking(insertedRows);
     } catch (err) {
       console.error("Booking save failed:", err);
+      // Roll back any slots we already marked booked, so they don't get stuck.
+      if (flippedIds.length > 0) {
+        await supabase.from("availability").update({ booked: false }).in("id", flippedIds);
+      }
       if (err.message === "ALREADY_BOOKED") {
-        setSubmitError("Sorry — someone else just booked this slot. Please pick a different time.");
+        setSubmitError(isPackage
+          ? "Sorry — one of your selected times was just booked by someone else. Please review your selections and try again."
+          : "Sorry — someone else just booked this slot. Please pick a different time.");
       } else {
         setSubmitError("Couldn't save your booking. Please try again or text Coach Noonan directly.");
       }
@@ -836,18 +889,27 @@ See you on the mat.
           : "Coach to pair")
       : null;
 
+    const sortedForCoach = sortSlotsByTime([...slots]).sort((a, b) =>
+      a.dateISO < b.dateISO ? -1 : a.dateISO > b.dateISO ? 1 : timeToMinutes(a.time) - timeToMinutes(b.time)
+    );
+    const whenForCoach = isPackage
+      ? sortedForCoach.map((s, i) => `Session ${i + 1}: ${fmtDate(s.dateISO)} at ${s.time}`).join(" | ")
+      : `${fmtDate(slot.dateISO)} at ${slot.time}`;
+
     const emailPayload = {
-      _subject: `🤼 New MatIQ booking — ${info.wrestler} · ${fmtDate(slot.dateISO)} ${slot.time}`,
+      _subject: isPackage
+        ? `🤼 New MatIQ ${sessionsNeeded}-pack — ${info.wrestler} (starts ${fmtDate(sortedForCoach[0].dateISO)})`
+        : `🤼 New MatIQ booking — ${info.wrestler} · ${fmtDate(slot.dateISO)} ${slot.time}`,
       "Wrestler": info.wrestler,
-      "Session": `${type.name} — $${type.price}${type.blurbPerPerson ? "/wrestler" : ""}`,
-      "When": `${fmtDate(slot.dateISO)} at ${slot.time}`,
+      "Session": `${type.name} — $${type.price}${type.blurbPerPerson ? "/wrestler" : isPackage ? ` (${sessionsNeeded} sessions)` : ""}`,
+      "When": whenForCoach,
       "Duration": fmtDuration(type.duration),
       "Contact Phone": info.contact,
       "Contact Email": info.email || "(not provided)",
-      "Payment Method": pay === "venmo" ? `Venmo (@${PAYMENT_INFO.venmo})`
+      "Payment Method": (isPackage ? "DUE AT FIRST SESSION — " : "") + (pay === "venmo" ? `Venmo (@${PAYMENT_INFO.venmo})`
         : pay === "cashapp" ? `Cash App ($${PAYMENT_INFO.cashapp})`
         : pay === "cash" ? "Cash at session"
-        : pay,
+        : pay),
       ...(partnerLine && { "Partner": partnerLine }),
       ...(info.notes && { "Notes from wrestler": info.notes }),
       "Booked at": new Date().toLocaleString("en-US", { timeZone: "America/New_York" }) + " ET",
@@ -872,8 +934,16 @@ See you on the mat.
     // never blocks the booking — they already have the on-screen confirmation.
     // ----------------------------------------------------------------------------
     if (info.email && info.email.trim()) {
-      const paymentNote =
-        pay === "venmo" ? `Please complete payment of $${type.price} via Venmo to @${PAYMENT_INFO.venmo}.`
+      const sortedSel = sortSlotsByTime([...slots]).sort((a, b) =>
+        a.dateISO < b.dateISO ? -1 : a.dateISO > b.dateISO ? 1 : timeToMinutes(a.time) - timeToMinutes(b.time)
+      );
+      const whenText = isPackage
+        ? sortedSel.map((s, i) => `Session ${i + 1}: ${fmtDate(s.dateISO)} at ${s.time}`).join("\n")
+        : `${fmtDate(slot.dateISO)} at ${slot.time}`;
+      const payMethodLabel = pay === "venmo" ? "Venmo" : pay === "cashapp" ? "Cash App" : "Cash at session";
+      const paymentNote = isPackage
+        ? `Your full package payment of $${type.price} is due at your first session. You can pay by ${payMethodLabel}${pay === "venmo" ? ` (@${PAYMENT_INFO.venmo})` : pay === "cashapp" ? ` ($${PAYMENT_INFO.cashapp})` : ""}.`
+        : pay === "venmo" ? `Please complete payment of $${type.price} via Venmo to @${PAYMENT_INFO.venmo}.`
         : pay === "cashapp" ? `Please complete payment of $${type.price} via Cash App to $${PAYMENT_INFO.cashapp}.`
         : `Please bring $${type.price} cash to your session.`;
       try {
@@ -888,9 +958,9 @@ See you on the mat.
               to_email: info.email.trim(),
               wrestler_name: info.wrestler,
               session_name: type.name,
-              session_when: `${fmtDate(slot.dateISO)} at ${slot.time}`,
-              session_price: `$${type.price}${type.blurbPerPerson ? " per wrestler" : ""}`,
-              payment_method: pay === "venmo" ? "Venmo" : pay === "cashapp" ? "Cash App" : "Cash at session",
+              session_when: whenText,
+              session_price: `$${type.price}${type.blurbPerPerson ? " per wrestler" : isPackage ? ` (${sessionsNeeded} sessions)` : ""}`,
+              payment_method: payMethodLabel,
               payment_note: paymentNote,
             },
           }),
@@ -905,7 +975,7 @@ See you on the mat.
     // Done — update UI state and show success screen
     setBooking(savedBooking);
     if (notifyError) setSubmitError(notifyError);
-    onComplete(savedBooking, slot.id);
+    onComplete(savedBooking, slotIds);
     setDone(true);
     setSubmitting(false);
   }
@@ -921,7 +991,7 @@ See you on the mat.
         </div>
         <div className="modal-body">
           {done ? (
-            <Success booking={booking} type={type} slot={slot} info={info} pay={pay} partnerNotified={isPartnerSession && partnerChoice === "own" && partnerInfo.notify} submitError={submitError} onClose={onClose} />
+            <Success booking={booking} type={type} slot={slot} slots={slots} isPackage={isPackage} sessionsNeeded={sessionsNeeded} info={info} pay={pay} partnerNotified={isPartnerSession && partnerChoice === "own" && partnerInfo.notify} submitError={submitError} onClose={onClose} />
           ) : (
             <>
               <div className="stepper">
@@ -946,22 +1016,55 @@ See you on the mat.
                 </div>
               )}
 
-              {/* STEP 1: Pick a time */}
+              {/* STEP 1: Pick a time (or multiple, for packages) */}
               {step === 1 && (
                 <div>
-                  <p style={{ color: "var(--fog)", marginBottom: 18 }}>Pick an open time for your <b style={{ color: "var(--paper)" }}>{type.name}</b>.</p>
+                  {isPackage ? (
+                    <>
+                      <p style={{ color: "var(--fog)", marginBottom: 6 }}>
+                        Pick <b style={{ color: "var(--paper)" }}>{sessionsNeeded} times</b> for your <b style={{ color: "var(--paper)" }}>{type.name}</b> — reserve up to {weeksHorizon} weeks out.
+                      </p>
+                      <div style={{
+                        display: "flex", alignItems: "center", justifyContent: "space-between",
+                        background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 10,
+                        padding: "10px 14px", marginBottom: 18, position: "sticky", top: 0, zIndex: 1,
+                      }}>
+                        <span style={{ fontSize: 13, fontWeight: 800, color: "var(--paper)" }}>
+                          {slots.length} of {sessionsNeeded} selected
+                        </span>
+                        <div style={{ display: "flex", gap: 5 }}>
+                          {Array.from({ length: sessionsNeeded }).map((_, i) => (
+                            <div key={i} style={{
+                              width: 22, height: 6, borderRadius: 3,
+                              background: i < slots.length ? "var(--red)" : "var(--line)",
+                            }} />
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <p style={{ color: "var(--fog)", marginBottom: 18 }}>Pick an open time for your <b style={{ color: "var(--paper)" }}>{type.name}</b>.</p>
+                  )}
                   {Object.keys(byDate).length === 0 ? (
                     <div className="empty">No open slots right now — check back soon.</div>
                   ) : (
-                    Object.entries(byDate).map(([date, slots]) => (
+                    Object.entries(byDate).map(([date, daySlots]) => (
                       <div className="day-block" key={date}>
                         <div className="day-label">{fmtDate(date)}</div>
                         <div className="slot-grid">
-                          {slots.map((s) => (
-                            <div key={s.id} className={`slot ${slot?.id === s.id ? "sel" : ""}`} onClick={() => setSlot(s)}>
-                              <div className="st">{s.time}</div>
-                            </div>
-                          ))}
+                          {daySlots.map((s) => {
+                            const selected = slots.find((x) => x.id === s.id);
+                            const atCap = isPackage && !selected && slots.length >= sessionsNeeded;
+                            return (
+                              <div
+                                key={s.id}
+                                className={`slot ${selected ? "sel" : ""} ${atCap ? "disabled" : ""}`}
+                                onClick={() => !atCap && toggleSlot(s)}
+                              >
+                                <div className="st">{s.time}</div>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     ))
@@ -1045,14 +1148,38 @@ See you on the mat.
                 <div>
                   <div className="summary">
                     <div className="summary-row"><span className="lbl">Session</span><span>{type.name}</span></div>
-                    <div className="summary-row"><span className="lbl">When</span><span>{fmtDate(slot.dateISO)} · {slot.time}</span></div>
+                    {isPackage ? (
+                      <div style={{ padding: "6px 0" }}>
+                        <span className="lbl" style={{ fontSize: 14, color: "var(--fog)" }}>Your {sessionsNeeded} sessions</span>
+                        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+                          {sortSlotsByTime([...slots]).sort((a, b) =>
+                            a.dateISO < b.dateISO ? -1 : a.dateISO > b.dateISO ? 1 : timeToMinutes(a.time) - timeToMinutes(b.time)
+                          ).map((s, i) => (
+                            <div key={s.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5 }}>
+                              <span style={{ color: "var(--fog2)" }}>Session {i + 1}</span>
+                              <span>{fmtDate(s.dateISO)} · {s.time}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="summary-row"><span className="lbl">When</span><span>{fmtDate(slot.dateISO)} · {slot.time}</span></div>
+                    )}
                     <div className="summary-row"><span className="lbl">Wrestler</span><span>{info.wrestler}</span></div>
                     {isPartnerSession && (
                       <div className="summary-row"><span className="lbl">Partner</span><span>{partnerChoice === "own" ? (partnerInfo.name || "TBD") : "Coach will pair"}</span></div>
                     )}
-                    <div className="summary-row total"><span>Total</span><span>${type.price}</span></div>
+                    <div className="summary-row total">
+                      <span>Total</span>
+                      <span>${type.price}{isPackage ? <span style={{ fontFamily: "'Archivo',sans-serif", fontSize: 13, color: "var(--fog2)", fontWeight: 600 }}> (${Math.round(type.price / sessionsNeeded)}/session)</span> : null}</span>
+                    </div>
                   </div>
-                  <p style={{ color: "var(--fog)", marginBottom: 14, fontSize: 14 }}>How would you like to pay?</p>
+                  {isPackage && (
+                    <div style={{ background: "rgba(224,169,46,.08)", border: "1px solid rgba(224,169,46,.3)", borderRadius: 10, padding: "12px 14px", marginBottom: 18, fontSize: 13, color: "var(--fog)", lineHeight: 1.5 }}>
+                      <b style={{ color: "var(--gold)" }}>Heads up:</b> Full package payment (${type.price}) is due at your <b style={{ color: "var(--paper)" }}>first session</b>. No payment needed now to reserve your spots — just pick how you'll pay below.
+                    </div>
+                  )}
+                  <p style={{ color: "var(--fog)", marginBottom: 14, fontSize: 14 }}>{isPackage ? "How will you pay at the first session?" : "How would you like to pay?"}</p>
                   <div className="pay-opts">
                     <div className={`pay-opt ${pay === "venmo" ? "sel" : ""}`} onClick={() => setPay("venmo")}>
                       <div className="pay-radio" />
@@ -1103,19 +1230,34 @@ See you on the mat.
   );
 }
 
-function Success({ booking, type, slot, info, pay, partnerNotified, submitError, onClose }) {
-  const venmoNote = encodeURIComponent(`MatIQ ${type.name} - ${info.wrestler} - ${fmtDate(slot.dateISO)} ${slot.time}`);
+function Success({ booking, type, slot, slots, isPackage, sessionsNeeded, info, pay, partnerNotified, submitError, onClose }) {
+  const venmoNote = encodeURIComponent(`MatIQ ${type.name} - ${info.wrestler}`);
   const venmoLink = `https://venmo.com/${PAYMENT_INFO.venmo}?txn=pay&amount=${type.price}&note=${venmoNote}`;
   const cashappLink = `https://cash.app/$${PAYMENT_INFO.cashapp}/${type.price}`;
 
   function copy(text) { navigator.clipboard?.writeText(text); }
+
+  const sortedSel = sortSlotsByTime([...(slots || [])]).sort((a, b) =>
+    a.dateISO < b.dateISO ? -1 : a.dateISO > b.dateISO ? 1 : timeToMinutes(a.time) - timeToMinutes(b.time)
+  );
 
   return (
     <div className="success">
       <div className="check">✓</div>
       <h3>See You On The Mat</h3>
       <p><b style={{ color: "var(--paper)" }}>{type.name}</b></p>
-      <p>{fmtDate(slot.dateISO)} · {slot.time}</p>
+      {isPackage ? (
+        <div style={{ margin: "10px auto 0", maxWidth: 320, textAlign: "left", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 12, padding: "14px 16px" }}>
+          {sortedSel.map((s, i) => (
+            <div key={s.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 14, padding: "4px 0", color: "var(--fog)" }}>
+              <span style={{ color: "var(--fog2)" }}>Session {i + 1}</span>
+              <span style={{ color: "var(--paper)", fontWeight: 600 }}>{fmtDate(s.dateISO)} · {s.time}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p>{fmtDate(slot.dateISO)} · {slot.time}</p>
+      )}
 
       {submitError && (
         <div style={{ background: "rgba(224,169,46,.08)", border: "1px solid rgba(224,169,46,.4)", borderRadius: 10, padding: "12px 14px", margin: "16px 0", fontSize: 13, color: "var(--fog)", lineHeight: 1.5, textAlign: "left" }}>
@@ -1123,32 +1265,44 @@ function Success({ booking, type, slot, info, pay, partnerNotified, submitError,
         </div>
       )}
 
-      {pay === "venmo" && (
+      {isPackage ? (
         <div className="pay-action">
-          <div className="pa-title">Complete Payment via Venmo</div>
-          <div className="pa-amount">Send <b style={{ color: "var(--paper)" }}>${type.price}</b> to:</div>
-          <div className="pa-handle">
-            <span>@{PAYMENT_INFO.venmo}</span>
-            <button className="copy-btn" onClick={() => copy(`@${PAYMENT_INFO.venmo}`)}>Copy</button>
+          <div className="pa-title">Payment at First Session</div>
+          <div className="pa-amount" style={{ marginBottom: 0 }}>
+            Your package total of <b style={{ color: "var(--paper)" }}>${type.price}</b> ({sessionsNeeded} sessions) is due at your first session. You chose to pay by <b style={{ color: "var(--paper)" }}>{pay === "venmo" ? "Venmo" : pay === "cashapp" ? "Cash App" : "cash"}</b>
+            {pay === "venmo" ? ` (@${PAYMENT_INFO.venmo})` : pay === "cashapp" ? ` ($${PAYMENT_INFO.cashapp})` : ""}. Nothing to pay now — your spots are reserved.
           </div>
-          <a className="pay-btn venmo" href={venmoLink} target="_blank" rel="noopener noreferrer">Open Venmo →</a>
         </div>
-      )}
+      ) : (
+        <>
+          {pay === "venmo" && (
+            <div className="pay-action">
+              <div className="pa-title">Complete Payment via Venmo</div>
+              <div className="pa-amount">Send <b style={{ color: "var(--paper)" }}>${type.price}</b> to:</div>
+              <div className="pa-handle">
+                <span>@{PAYMENT_INFO.venmo}</span>
+                <button className="copy-btn" onClick={() => copy(`@${PAYMENT_INFO.venmo}`)}>Copy</button>
+              </div>
+              <a className="pay-btn venmo" href={venmoLink} target="_blank" rel="noopener noreferrer">Open Venmo →</a>
+            </div>
+          )}
 
-      {pay === "cashapp" && (
-        <div className="pay-action">
-          <div className="pa-title">Complete Payment via Cash App</div>
-          <div className="pa-amount">Send <b style={{ color: "var(--paper)" }}>${type.price}</b> to:</div>
-          <div className="pa-handle">
-            <span>${PAYMENT_INFO.cashapp}</span>
-            <button className="copy-btn" onClick={() => copy(`$${PAYMENT_INFO.cashapp}`)}>Copy</button>
-          </div>
-          <a className="pay-btn cashapp" href={cashappLink} target="_blank" rel="noopener noreferrer">Open Cash App →</a>
-        </div>
-      )}
+          {pay === "cashapp" && (
+            <div className="pay-action">
+              <div className="pa-title">Complete Payment via Cash App</div>
+              <div className="pa-amount">Send <b style={{ color: "var(--paper)" }}>${type.price}</b> to:</div>
+              <div className="pa-handle">
+                <span>${PAYMENT_INFO.cashapp}</span>
+                <button className="copy-btn" onClick={() => copy(`$${PAYMENT_INFO.cashapp}`)}>Copy</button>
+              </div>
+              <a className="pay-btn cashapp" href={cashappLink} target="_blank" rel="noopener noreferrer">Open Cash App →</a>
+            </div>
+          )}
 
-      {pay === "cash" && (
-        <p style={{ marginTop: 14 }}>Spot reserved. Bring <b style={{ color: "var(--paper)" }}>${type.price}</b> cash to your session.</p>
+          {pay === "cash" && (
+            <p style={{ marginTop: 14 }}>Spot reserved. Bring <b style={{ color: "var(--paper)" }}>${type.price}</b> cash to your session.</p>
+          )}
+        </>
       )}
 
       {info.email && (
@@ -1210,8 +1364,32 @@ function AdminPanel({ sessionTypes, setSessionTypes, availability, setAvailabili
     const booking = bookings.find((b) => b.id === bookingId);
     if (!booking) return;
     try {
-      // Reopen the slot (only if we have a slot_id reference)
-      if (booking.slotId) {
+      // Reopen the slot(s). For packages, reopen every session's slot by
+      // matching date+time (parsed from the stored package_sessions text).
+      // For single bookings, reopen by slot_id (or date+time fallback).
+      if (booking.packageSessions) {
+        // package_sessions format: "Mon, Jun 9 at 7:00 AM; Tue, Jun 10 at 8:00 AM"
+        // We reopen by matching each (date, time) against availability rows.
+        // Reconstruct the date/time pairs from the slots currently marked
+        // booked that belong to this booking is unreliable, so we match the
+        // stored display strings against availability via the times we have.
+        const sessionParts = booking.packageSessions.split(";").map((p) => p.trim());
+        // For each part, extract the time (after " at ") and reopen any matching
+        // booked slot on the right date. We match by re-deriving from availability.
+        for (const part of sessionParts) {
+          const atIdx = part.lastIndexOf(" at ");
+          if (atIdx === -1) continue;
+          const timeStr = part.slice(atIdx + 4).trim();
+          const dateLabel = part.slice(0, atIdx).trim();
+          // Find the availability row whose formatted date matches dateLabel and time matches
+          const match = availability.find(
+            (s) => s.time === timeStr && fmtDate(s.dateISO) === dateLabel
+          );
+          if (match) {
+            await supabase.from("availability").update({ booked: false }).eq("id", match.id);
+          }
+        }
+      } else if (booking.slotId) {
         const { error: slotErr } = await supabase
           .from("availability")
           .update({ booked: false })
@@ -1232,15 +1410,12 @@ function AdminPanel({ sessionTypes, setSessionTypes, availability, setAvailabili
         .delete()
         .eq("id", bookingId);
       if (bkErr) throw bkErr;
-      // Update local state
+      // Refresh from the database to get accurate slot states (simplest for
+      // packages, since multiple slots changed).
+      const { data: avData } = await supabase
+        .from("availability").select("*").order("date_iso").order("time");
+      if (avData) setAvailability(avData.map(fromDbSlot));
       setBookings((bs) => bs.filter((b) => b.id !== bookingId));
-      setAvailability((av) =>
-        av.map((s) =>
-          (s.id === booking.slotId || (s.dateISO === booking.dateISO && s.time === booking.time))
-            ? { ...s, booked: false }
-            : s
-        )
-      );
     } catch (err) {
       console.error("Delete booking failed:", err);
       alert("Couldn't delete the booking. Please refresh and try again.");
@@ -1508,15 +1683,23 @@ function BookingsAdmin({ bookings, onDelete }) {
       {bookings.map((b) => (
         <div className="bk-card" key={b.id}>
           <div className="bk-top">
-            <span className="bk-name">{b.wrestler}{b.isPartner && <span className="pill partner">Partner Session</span>}</span>
+            <span className="bk-name">{b.wrestler}{b.isPartner && <span className="pill partner">Partner Session</span>}{b.packageSessions && <span className="pill partner">Package</span>}</span>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span className={`pill ${payClass(b.payment)}`}>{payLabel(b.payment)}</span>
-              <button className="mini danger" onClick={() => handleDelete(b)} title="Delete booking and reopen slot">Delete</button>
+              <button className="mini danger" onClick={() => handleDelete(b)} title="Delete booking and reopen slot(s)">Delete</button>
             </div>
           </div>
           <div style={{ color: "var(--fog)", fontSize: 14 }}>
-            {b.type} · {fmtDate(b.dateISO)} · {b.time} · ${b.price}
+            {b.packageSessions
+              ? `${b.type} · $${b.price}`
+              : `${b.type} · ${fmtDate(b.dateISO)} · ${b.time} · $${b.price}`}
           </div>
+          {b.packageSessions && (
+            <div style={{ color: "var(--paper)", fontSize: 13, marginTop: 6, fontWeight: 600 }}>
+              📅 {b.packageSessions}
+              <span style={{ color: "var(--gold)", fontWeight: 700 }}> · payment due at first session</span>
+            </div>
+          )}
           <div style={{ color: "var(--fog2)", fontSize: 13, marginTop: 6 }}>
             {b.contact}{b.email ? ` · ${b.email}` : ""}
             {b.isPartner && (
